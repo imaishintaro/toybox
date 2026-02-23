@@ -131,10 +131,16 @@ class Agent:
         client: OpenRouterClient,
         work_dir: str = ".",
         max_iterations: int = 20,
+        agent_name: str = "claw",
+        role_system_prompt: str | None = None,
+        board_path: str | None = None,
     ) -> None:
         self.client = client
         self.work_dir = work_dir
         self.max_iterations = max_iterations
+        self.agent_name = agent_name
+        self.role_system_prompt = role_system_prompt
+        self.board_path = board_path
         self.state = AgentState()
 
     def reset_conversation(self) -> None:
@@ -183,7 +189,7 @@ class Agent:
             for ev in self.client.stream_events(
                 messages=self._get_messages_for_api(),
                 tools=TOOL_DEFINITIONS,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=self._build_system_prompt(),
             ):
                 match ev.type:
                     case "text_delta":
@@ -250,7 +256,9 @@ class Agent:
 
                 logger.debug("ツール実行: %s(%s)", tc["name"], list(arguments.keys()))
                 result_str = execute_tool(
-                    tc["name"], arguments, work_dir=self.work_dir
+                    tc["name"], arguments,
+                    work_dir=self.work_dir,
+                    board_path=self.board_path,
                 )
                 self.state.tool_call_count += 1
 
@@ -270,6 +278,25 @@ class Agent:
 
         # while ループ正常終了 = max_iterations 到達
         yield ("max_iterations", self.max_iterations)
+
+    def _build_system_prompt(self) -> str:
+        """
+        エージェント固有のシステムプロンプトを組み立てる。
+
+        role_system_prompt が設定されている場合は先頭に追加する。
+        """
+        parts = []
+        if self.role_system_prompt:
+            parts.append(self.role_system_prompt)
+        if self.board_path:
+            parts.append(
+                f"\n## 共有ボード\n"
+                f"エージェント名: {self.agent_name}\n"
+                f"共有ボードファイル: {self.board_path}\n"
+                "重要な情報・完了報告は post_to_board ツールで共有ボードに投稿してください。"
+            )
+        parts.append(SYSTEM_PROMPT)
+        return "\n\n".join(parts)
 
     def _get_messages_for_api(self) -> list[dict]:
         """

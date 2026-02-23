@@ -203,6 +203,41 @@ class OpenRouterClient:
         yield StreamEvent("stream_done", None)
 
 
+    def chat_completion(
+        self,
+        messages: list[dict],
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> str:
+        """
+        非ストリーミングで API を呼び出してテキストを返す。
+
+        主にオーケストレーターの計画生成など、
+        JSON レスポンスが必要な場面で使用する。
+
+        Returns:
+            アシスタントの応答テキスト
+
+        Raises:
+            Exception: API 呼び出し失敗時
+        """
+        full_messages = _build_messages(messages, system_prompt)
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=full_messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+        )
+        content = response.choices[0].message.content or ""
+        logger.debug(
+            "chat_completion 完了: %d 文字",
+            len(content),
+        )
+        return content
+
+
 def _build_messages(messages: list[dict], system_prompt: str | None) -> list[dict]:
     """システムプロンプトをメッセージ先頭に挿入する。"""
     if not system_prompt:

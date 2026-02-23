@@ -201,6 +201,33 @@ TOOL_DEFINITIONS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "post_to_board",
+            "description": (
+                "マルチエージェント共有ボードにメッセージを投稿する。"
+                "他のエージェントや進捗状況の共有に使用する。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "ボードに投稿するメッセージ（Markdown形式可）",
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": (
+                            "投稿するセクション名 (例: '進捗', '完了', '問題点')。"
+                            "省略時は末尾に追記する。"
+                        ),
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
 ]
 
 
@@ -208,7 +235,12 @@ TOOL_DEFINITIONS: list[dict] = [
 # ツール実行関数
 # ============================================================
 
-def execute_tool(name: str, arguments: dict[str, Any], work_dir: str = ".") -> str:
+def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    work_dir: str = ".",
+    board_path: str | None = None,
+) -> str:
     """
     ツール名と引数を受け取り実行し、結果文字列を返す。
 
@@ -216,6 +248,7 @@ def execute_tool(name: str, arguments: dict[str, Any], work_dir: str = ".") -> s
         name: ツール名
         arguments: ツールの引数
         work_dir: デフォルト作業ディレクトリ
+        board_path: 共有ボードファイルパス（post_to_board ツール用）
 
     Returns:
         ツール実行結果の文字列
@@ -236,6 +269,10 @@ def execute_tool(name: str, arguments: dict[str, Any], work_dir: str = ".") -> s
                 return _grep(base_dir=work_dir, **arguments)
             case "list_directory":
                 return _list_directory(base_dir=work_dir, **arguments)
+            case "post_to_board":
+                if not board_path:
+                    return "[ERROR] 共有ボードが設定されていません（シングルエージェントモード）"
+                return _post_to_board(board_path=board_path, **arguments)
             case _:
                 return f"[ERROR] 未知のツール: {name}"
     except Exception as e:
@@ -466,3 +503,27 @@ def _format_size(size: int) -> str:
             return f"{size:.0f}{unit}"
         size //= 1024
     return f"{size:.0f}TB"
+
+
+def _post_to_board(
+    board_path: str,
+    message: str,
+    section: str | None = None,
+) -> str:
+    """共有ボードにメッセージを追記する。"""
+    import datetime
+
+    path = Path(board_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+
+    if section:
+        entry = f"\n### {section} [{timestamp}]\n{message}\n"
+    else:
+        entry = f"\n---\n**[{timestamp}]**\n{message}\n"
+
+    with path.open("a", encoding="utf-8") as f:
+        f.write(entry)
+
+    return f"共有ボードに投稿しました: {board_path}"

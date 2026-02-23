@@ -15,6 +15,7 @@ import logging
 import os
 import argparse
 import time
+import threading
 from pathlib import Path
 
 from rich.console import Console
@@ -37,6 +38,9 @@ from func_session import (
     save_session, load_session, list_sessions,
     delete_session, autosave_exists, AUTOSAVE_NAME,
 )
+from func_orchestrator import plan_project, format_plan_display, ProjectPlan
+from func_multi_agent import MultiAgentRunner
+import func_tmux as tmux
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -339,6 +343,15 @@ def handle_slash_command(cmd: str, agent: Agent, config: dict) -> bool:
         case "/model":
             console.print(f"[dim]モデル: {agent.client.model}[/dim]")
 
+        case "/project":
+            if not arg:
+                console.print(
+                    "[bold red]使い方: /project <プロジェクトの説明>[/bold red]\n"
+                    "[dim]例: /project Pythonで簡単なTODOアプリを作って[/dim]"
+                )
+            else:
+                run_project(arg, agent.client, config)
+
         case "/help":
             _print_help()
 
@@ -377,11 +390,264 @@ def _print_stats(agent: Agent) -> None:
     console.print()
 
 
+def run_project(
+    project_description: str,
+    client: OpenRouterClient,
+    config: dict,
+) -> None:
+    """
+    マルチエージェントプロジェクトを実行する。
+
+    1. オーケストレーターが計画を生成
+    2. ユーザーが計画を確認
+    3. tmux セッションをセットアップ（利用可能な場合）
+    4. エージェントを実行
+    5. 結果を表示
+    """
+    work_dir = config["work_dir"]
+    sessions_dir = str(Path(__file__).parent.parent / "sessions")
+
+    # ── 計画生成 ──────────────────────────────────────────────
+    console.print()
+    console.print(
+        Panel(
+            Text.from_markup(
+                f"[bold]{project_description}[/bold]\n\n"
+                "[dim]オーケストレーターがエージェント割り当て計画を生成しています...[/dim]"
+            ),
+            title="[bold cyan]🎯 プロジェクト開始[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
+    console.print()
+
+    with console.status("[bold cyan]計画を生成中...[/bold cyan]", spinner="dots"):
+        plan = plan_project(client, project_description, work_dir)
+
+    # ── 計画を表示して確認 ───────────────────────────────────
+    plan_text = format_plan_display(plan)
+    console.print(
+        Panel(
+            Text(plan_text),
+            title="[bold yellow]📋 エージェント計画[/bold yellow]",
+            border_style="yellow",
+            padding=(0, 2),
+        )
+    )
+    console.print()
+
+    if not Confirm.ask("この計画でプロジェクトを開始しますか？", console=console, default=True):
+        console.print("[dim]プロジェクトをキャンセルしました。[/dim]")
+        return
+
+    console.print()
+
+    # ── tmux セットアップ ────────────────────────────────────
+    agent_names = [a.agent_name for a in plan.agents]
+    session_name = f"claw_{int(time.time()) % 10000}"
+    python_bin = sys.executable
+
+    # ダミーの log_dir と board_path（実際の値は MultiAgentRunner が生成する）
+    # tmux は先に作るが、ログファイルは実行時に作られるので watch.py が待機する
+    import tempfile
+    tmp_log_dir = str(Path(sessions_dir) / "tmp_logs")
+    tmp_board = str(Path(sessions_dir) / "tmp_board.md")
+    Path(tmp_log_dir).mkdir(parents=True, exist_ok=True)
+
+    tmux_available = tmux.is_available()
+    tmux_session = None
+
+    if tmux_available:
+        try:
+            tmux_session = tmux.setup_project_session(
+                session_name=session_name,
+                agent_names=agent_names,
+                log_dir=tmp_log_dir,
+                board_path=tmp_board,
+                work_dir=work_dir,
+                python_bin=python_bin,
+            )
+            console.print(
+                f"[dim cyan]✓ tmux セッション '{tmux_session}' をセットアップしました[/dim cyan]"
+            )
+            if not tmux.in_tmux_session():
+                console.print(
+                    f"[dim cyan]  アタッチ: [bold]tmux attach -t {tmux_session}[/bold][/dim cyan]"
+                )
+        except Exception as e:
+            logger.warning("tmux セットアップ失敗: %s", e)
+            console.print(f"[dim yellow]⚠ tmux セットアップ失敗（継続します）: {e}[/dim yellow]")
+    else:
+        console.print("[dim]tmux が利用できません（ログはファイルに保存されます）[/dim]")
+
+    console.print()
+
+    # ── エージェント実行（Live UI 付き） ───────────────────────
+    runner = MultiAgentRunner(
+        client=client,
+        work_dir=work_dir,
+        max_iterations=config["max_iterations"],
+        sessions_dir=sessions_dir,
+    )
+
+    # 実行状況を表示するためのステート
+    agent_status: dict[str, str] = {name: "待機中" for name in agent_names}
+    status_lock = threading.Lock()
+
+    def event_callback(event_type: str, agent_name: str, data) -> None:
+        """エージェントイベントをリアルタイムで UI に反映する。"""
+        with status_lock:
+            match event_type:
+                case "agent_start":
+                    agent_status[agent_name] = "実行中"
+                case "api_start":
+                    agent_status[agent_name] = f"思考中 (iter {data})"
+                case "tool_call_start":
+                    tc = data if isinstance(data, dict) else {}
+                    agent_status[agent_name] = f"ツール: {tc.get('name', '?')}"
+                case "turn_done":
+                    agent_status[agent_name] = f"完了 ({data:.1f}s)"
+                case "error":
+                    agent_status[agent_name] = f"エラー: {str(data)[:50]}"
+                case "max_iterations":
+                    agent_status[agent_name] = "上限到達"
+
+    def _make_status_table() -> Table:
+        """エージェントステータステーブルを生成する。"""
+        table = Table(
+            title="[bold cyan]🤖 エージェント実行状況[/bold cyan]",
+            box=box.ROUNDED,
+            border_style="cyan",
+            show_lines=False,
+        )
+        table.add_column("エージェント", style="bold cyan", no_wrap=True)
+        table.add_column("役割", style="dim")
+        table.add_column("状態", style="yellow")
+        for assignment in plan.agents:
+            name = assignment.agent_name
+            with status_lock:
+                status = agent_status.get(name, "待機中")
+            style = (
+                "bold green" if "完了" in status
+                else "bold red" if "エラー" in status
+                else "yellow"
+            )
+            table.add_row(name, assignment.role, Text(status, style=style))
+        return table
+
+    results: dict[str, dict] = {}
+    run_done = threading.Event()
+
+    def _run_in_thread() -> None:
+        nonlocal results
+        try:
+            results = runner.run(plan, event_callback=event_callback)
+        finally:
+            run_done.set()
+
+    run_thread = threading.Thread(target=_run_in_thread, daemon=True)
+    run_thread.start()
+
+    # Live UI でステータスを更新
+    try:
+        with Live(
+            _make_status_table(),
+            console=console,
+            refresh_per_second=4,
+            vertical_overflow="visible",
+        ) as live:
+            while not run_done.wait(timeout=0.3):
+                live.update(_make_status_table())
+            live.update(_make_status_table())
+    except KeyboardInterrupt:
+        console.print("\n[dim cyan]プロジェクトを中断しました。[/dim cyan]")
+        return
+
+    # ── 実行結果を表示 ──────────────────────────────────────
+    console.print()
+    _print_project_results(results, plan)
+
+    # ボードファイルのパスを出力（tmux セッションに表示されるはず）
+    if results:
+        # 最初の結果から board_path を推定（現状は summary 情報なし → runner から取る方法なし）
+        # 代わりに sessions_dir から最新ディレクトリを探す
+        _show_board_hint(sessions_dir, tmux_session)
+
+
+def _print_project_results(results: dict[str, dict], plan: ProjectPlan) -> None:
+    """プロジェクト実行結果をコンソールに表示する。"""
+    all_success = all(r["success"] for r in results.values())
+
+    title_style = "bold green" if all_success else "bold yellow"
+    title_icon = "✅" if all_success else "⚠"
+
+    table = Table(
+        title=f"[{title_style}]{title_icon} プロジェクト完了[/{title_style}]",
+        box=box.ROUNDED,
+        border_style="green" if all_success else "yellow",
+    )
+    table.add_column("エージェント", style="bold", no_wrap=True)
+    table.add_column("役割")
+    table.add_column("結果", justify="center")
+    table.add_column("時間", justify="right")
+    table.add_column("反復/ツール", justify="right")
+
+    for assignment in plan.agents:
+        name = assignment.agent_name
+        r = results.get(name, {})
+        success = r.get("success", False)
+        elapsed = r.get("elapsed", 0)
+        stats = r.get("stats", {})
+        status_text = Text("✅ 成功" if success else "❌ 失敗")
+        status_text.stylize("bold green" if success else "bold red")
+        table.add_row(
+            name,
+            assignment.role,
+            status_text,
+            f"{elapsed:.1f}s",
+            f"{stats.get('iteration_count', 0)} / {stats.get('tool_call_count', 0)}",
+        )
+
+    console.print(table)
+    console.print()
+
+
+def _show_board_hint(sessions_dir: str, tmux_session: str | None) -> None:
+    """共有ボードのパスヒントを表示する。"""
+    sessions_path = Path(sessions_dir)
+    if not sessions_path.exists():
+        return
+
+    # 最新の project_* ディレクトリを探す
+    project_dirs = sorted(
+        [d for d in sessions_path.iterdir() if d.is_dir() and d.name.startswith("project_")],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    if not project_dirs:
+        return
+
+    board_path = project_dirs[0] / "board.md"
+    if board_path.exists():
+        console.print(
+            f"[dim cyan]共有ボード: [bold]{board_path}[/bold][/dim cyan]"
+        )
+        if tmux_session:
+            console.print(
+                f"[dim]  tmux セッション [bold]{tmux_session}[/bold] の shared ウィンドウで確認できます[/dim]"
+            )
+        else:
+            console.print(f"[dim]  cat {board_path}[/dim]")
+    console.print()
+
+
 def _print_help() -> None:
     table = Table(title="利用可能なコマンド", box=box.ROUNDED, border_style="cyan")
     table.add_column("コマンド", style="bold cyan", no_wrap=True)
     table.add_column("説明")
     rows = [
+        ("/project <説明>", "マルチエージェントでプロジェクトを実行する"),
         ("/exit, /quit, /q", "clawを終了する"),
         ("/reset, /clear", "会話履歴をリセットする"),
         ("/save [名前]", "会話をセッションファイルに保存する"),
