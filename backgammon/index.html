@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>バックギャモン</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>バックギャモン</h1>
+    <div id="game-container">
+        <div id="board">
+            <!-- ここにポイント（三角形）と駒が配置されます -->
+        </div>
+        <div id="info-panel">
+            <p>現在のプレイヤー: <span id="current-player"></span></p>
+            <div id="dice-area">
+                <button id="roll-dice-button">サイコロを振る</button>
+                <div id="dice-display">
+                    <span id="die1"></span>
+                    <span id="die2"></span>
+                </div>
+            </div>
+            <p id="message"></p>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

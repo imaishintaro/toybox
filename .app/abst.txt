@@ -1,0 +1,52 @@
+プロジェクト名: claw (Claude-Like Agent Workflow)
+
+概要:
+OpenRouter APIを使用したClaude Codeライクなターミナルエージェントツール。
+.envでAPIキーとモデルを設定するだけで、任意のOpenRouter対応モデルで
+Claude Codeと同様のエージェントループ体験を提供する。
+
+ディレクトリ構成:
+  toy_code/
+  ├── .env                   ← APIキー等の設定（要作成）
+  ├── run.sh                 ← 起動スクリプト
+  └── .app/                  ← ツール本体（隠しフォルダ）
+      ├── abst.txt
+      ├── requirements.txt
+      ├── .env.example
+      └── src/
+          ├── main.py        ← エントリーポイント・REPL
+          ├── func_agent.py  ← エージェントループ
+          ├── func_tools.py  ← ツール実装
+          ├── func_openrouter.py  ← OpenRouter APIクライアント
+          └── func_config.py     ← 設定読み込み
+
+主要機能:
+- エージェントループ: ツールを自律的に呼び出しタスクを完遂（最大20回）
+- リアルタイムUI: ストリーミングでテキストをトークン単位で表示、ツール実行中はスピナー
+- セッション保存/復元: 中断後も /load または起動時の提案で会話を再開
+- ファイル操作: read_file / write_file / edit_file（精度の高い差分編集）
+- シェル実行: bash（タイムアウト付き、exitコード表示）
+- ファイル検索: glob / grep（正規表現、コンテキスト行対応）
+- ディレクトリ一覧: list_directory
+- APIリトライ: 通信エラー時に最大3回自動リトライ
+- コンテキスト管理: 長い会話の自動トリミング
+
+セッションコマンド:
+  /save [名前]  会話をファイルに保存
+  /load [名前]  セッションを読み込む
+  /sessions     一覧表示
+  /delete <名前> 削除
+
+セットアップ:
+  cp .app/.env.example .env
+  # .envを編集してAPIキーとモデルを設定
+  conda create -n toy_code python=3.11
+  conda activate toy_code
+  pip install -r .app/requirements.txt
+
+実行:
+  bash run.sh
+  # または
+  python .app/src/main.py
+  python .app/src/main.py --work-dir ~/projects/myapp
+  python .app/src/main.py --debug
