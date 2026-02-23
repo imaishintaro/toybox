@@ -48,9 +48,21 @@ Analyze the given project description and create an agent assignment plan.
 Rules:
 - Assign at least 2 agents (more if the project requires it)
 - Agent names must be: claw_1, claw_2, claw_3, ... (sequential numbers)
-- Each agent should have a clear, specific role and task
+- Each agent should have a clear, specific role and MUST produce concrete file deliverables
 - Prefer sequential execution unless tasks are truly independent
 - Response MUST be valid JSON only — no markdown, no explanation
+
+CRITICAL - Task descriptions MUST:
+1. Start with "以下のファイルを作成してください:" and list exact file paths
+2. Specify what to READ from the shared board (previous agents' outputs)
+3. Never be vague - always specify exact file names and what to write
+4. Later agents should explicitly reference files created by earlier agents
+
+Example task for claw_1:
+"以下のファイルを作成してください:\\n- README.md (プロジェクト概要・セットアップ手順)\\n- requirements.txt (必要なパッケージ)\\n- src/main.py (エントリーポイント、スケルトンのみ)\\n\\n完了後、作成したファイル一覧を post_to_board で共有ボードに投稿してください。"
+
+Example task for claw_2 (depends on claw_1):
+"まず共有ボードを read_file で読み、claw_1 が作成したファイル構成を確認してください。\\n次に以下を実装してください:\\n- src/models.py (データモデル定義)\\n- src/database.py (DB操作関数)\\n\\n完了後、実装内容を post_to_board で共有ボードに投稿してください。"
 
 JSON schema:
 {
@@ -58,12 +70,12 @@ JSON schema:
     {
       "agent_name": "claw_1",
       "role": "Agent role title",
-      "task": "Detailed task description",
+      "task": "Detailed task with explicit file creation instructions",
       "depends_on": []
     }
   ],
   "execution_order": "sequential",
-  "board_init": "# Project: <title>\\n\\n## Overview\\n<overview>\\n\\n## Progress\\n"
+  "board_init": "# Project: <title>\\n\\n## Overview\\n<overview>\\n\\n## Agent Outputs\\n"
 }
 """
 
@@ -72,7 +84,8 @@ _ORCHESTRATOR_USER_TMPL = """Project description:
 
 Working directory: {work_dir}
 
-Create a multi-agent plan for this project. Respond with JSON only."""
+Create a multi-agent plan. Each agent MUST create concrete files as deliverables.
+Respond with JSON only."""
 
 
 def plan_project(
@@ -191,8 +204,13 @@ def _default_plan(project_description: str, claw_prefix: str) -> ProjectPlan:
                 role="設計・実装担当",
                 task=(
                     f"以下のプロジェクトを設計・実装してください:\n{project_description}\n\n"
-                    "まず要件を整理し、ファイル構成を決定してから実装を進めてください。"
-                    "完了したら共有ボードに結果を記録してください。"
+                    "## 必須アクション（テキストだけの回答は禁止）\n"
+                    "1. list_directory でプロジェクト構造を確認する\n"
+                    "2. 必要なファイルを write_file で作成する（README.md, requirements.txt, "
+                    "src/main.py など）\n"
+                    "3. 実装が完了したら bash でコードが動作することを確認する\n"
+                    "4. post_to_board で作成したファイル一覧と概要を共有ボードに投稿する\n\n"
+                    "ファイルを作成せずにタスクを終了しないでください。"
                 ),
                 depends_on=[],
             ),
@@ -201,8 +219,13 @@ def _default_plan(project_description: str, claw_prefix: str) -> ProjectPlan:
                 role="レビュー・テスト担当",
                 task=(
                     f"以下のプロジェクトのコードをレビュー・テストしてください:\n{project_description}\n\n"
-                    "共有ボードで前のエージェントの作業結果を確認し、"
-                    "コードの品質チェック・テスト実行・改善提案を行ってください。"
+                    "## 必須アクション（テキストだけの回答は禁止）\n"
+                    f"1. 共有ボードを read_file で読み、{claw_prefix}_1 の成果を確認する\n"
+                    "2. glob と read_file で実装ファイルを確認する\n"
+                    "3. bash でテストを実行する\n"
+                    "4. 問題があれば edit_file で修正する\n"
+                    "5. post_to_board でテスト結果と最終評価を共有ボードに投稿する\n\n"
+                    "ファイルを読まずにタスクを終了しないでください。"
                 ),
                 depends_on=[f"{claw_prefix}_1"],
             ),

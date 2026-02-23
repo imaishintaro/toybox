@@ -82,6 +82,15 @@ Adapt when you discover unexpected things; do not rigidly follow an initial plan
 - Detailed summary when the full task is complete
 - Confirm with user BEFORE: deleting files, major rewrites, irreversible operations
 - On error: state what happened, why, what you'll try next
+
+## MULTI-AGENT MODE (when board_path is set)
+You are one agent in a multi-agent team. Additional rules:
+- **ALWAYS produce file deliverables** — never finish with text-only responses
+- Use write_file to create every file mentioned in your task
+- Use bash to verify your code actually runs before finishing
+- Use post_to_board to report your completed files and results
+- If depends_on is set: read the shared board FIRST to see what previous agents built
+- Do NOT re-implement what previous agents already created; build on their work
 """
 
 # コンテキストウィンドウ管理

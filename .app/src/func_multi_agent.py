@@ -104,10 +104,23 @@ def _run_single_agent(
     ag_logger = AgentLogger(log_path, agent_name)
 
     # ロールシステムプロンプトを生成
+    board_read_instruction = (
+        f"\n## 開始前に必ず行うこと\n"
+        f"read_file ツールで共有ボード ({board_path}) を読み、"
+        f"前のエージェントの成果を確認してから作業を開始してください。\n"
+    ) if assignment.depends_on else ""
+
     role_prompt = (
-        f"## あなたの役割: {assignment.role}\n\n"
+        f"## あなたのエージェント名: {agent_name}\n"
+        f"## あなたの役割: {assignment.role}\n"
+        f"{board_read_instruction}\n"
         f"## あなたのタスク\n{assignment.task}\n\n"
-        f"タスクが完了したら、必ず post_to_board ツールで結果を共有ボードに投稿してください。"
+        f"## 絶対ルール（違反禁止）\n"
+        f"- **テキストだけで回答して終了することは禁止**\n"
+        f"- **必ず write_file / edit_file / bash のいずれかを使って成果物を残すこと**\n"
+        f"- タスクに「ファイルを作成」と書いてある場合、実際に write_file で作成すること\n"
+        f"- 「確認した」「設計した」だけで終わらず、必ずファイルに書き出すこと\n"
+        f"- タスク完了時は必ず post_to_board ツールで成果を共有ボードに投稿すること\n"
     )
 
     agent = Agent(
