@@ -16,6 +16,8 @@ from openai import OpenAI, AzureOpenAI
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+LMSTUDIO_BASE_URL = "http://localhost:1234/v1"
 
 # 接続リトライ設定
 MAX_CONNECT_RETRIES = 3
@@ -250,12 +252,34 @@ class AzureOpenAIClient(_BaseChatClient):
         )
 
 
+class LocalLLMClient(_BaseChatClient):
+    """
+    Ollama / LM Studio など OpenAI 互換のローカル LLM クライアント。
+
+    ツール呼び出し（function calling）に対応したモデルが必要。
+    対応モデル例:
+      Ollama  : llama3.3, qwen2.5-coder, mistral-nemo など
+      LMStudio: 同上（モデル次第）
+    """
+
+    def __init__(self, model: str, base_url: str = OLLAMA_BASE_URL) -> None:
+        self.model = model
+        self._client = OpenAI(
+            api_key="local",      # 認証不要だが空文字は SDK が拒否するため任意の文字列を設定
+            base_url=base_url,
+            http_client=_make_httpx_client(),
+        )
+
+
 def create_chat_client(config: dict) -> _BaseChatClient:
     """
     設定に基づいてチャットクライアントを生成するファクトリ。
 
-    config["provider"] が "azure" なら AzureOpenAIClient、
-    それ以外（"openrouter"）なら OpenRouterClient を返す。
+    provider の値に応じて返すクライアントが変わる:
+      "azure"    → AzureOpenAIClient
+      "ollama"   → LocalLLMClient (localhost:11434)
+      "lmstudio" → LocalLLMClient (localhost:1234)
+      その他     → OpenRouterClient (デフォルト)
     """
     provider = config.get("provider", "openrouter")
     if provider == "azure":
@@ -264,6 +288,11 @@ def create_chat_client(config: dict) -> _BaseChatClient:
             endpoint=config["azure_endpoint"],
             deployment=config["azure_deployment"],
             api_version=config["azure_api_version"],
+        )
+    if provider in ("ollama", "lmstudio"):
+        return LocalLLMClient(
+            model=config["model"],
+            base_url=config["local_base_url"],
         )
     return OpenRouterClient(api_key=config["api_key"], model=config["model"])
 

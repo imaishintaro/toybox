@@ -73,6 +73,8 @@ def load_config() -> dict:
     work_dir = os.getenv("WORK_DIR", "").strip() or os.getcwd()
 
     # ── チャットプロバイダー別の必須設定を読み込む ────────────────────
+    local_base_url = ""  # Ollama / LM Studio 用
+
     if provider == "azure":
         api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
         azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
@@ -91,6 +93,25 @@ def load_config() -> dict:
         ]
         if missing:
             print(f"[ERROR] Azure OpenAI の設定が不足しています: {', '.join(missing)}")
+            sys.exit(1)
+
+    elif provider == "ollama":
+        # Ollama ローカル LLM
+        api_key = "local"
+        model = os.getenv("OLLAMA_MODEL", "llama3.2").strip()
+        local_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
+        azure_endpoint = azure_deployment = azure_api_version = ""
+
+    elif provider == "lmstudio":
+        # LM Studio ローカル LLM
+        api_key = "local"
+        model = os.getenv("LMSTUDIO_MODEL", "").strip()
+        local_base_url = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1").strip()
+        azure_endpoint = azure_deployment = azure_api_version = ""
+
+        if not model:
+            print("[ERROR] LMSTUDIO_MODEL が設定されていません。")
+            print("  例: LMSTUDIO_MODEL=lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF")
             sys.exit(1)
 
     else:
@@ -163,6 +184,8 @@ def load_config() -> dict:
         # その他
         "openrouter_api_key": openrouter_api_key,
         "context_window": context_window,
+        # ローカル LLM 設定（Ollama / LM Studio）
+        "local_base_url": local_base_url,
     }
 
 

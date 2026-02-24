@@ -311,7 +311,12 @@ def run_agent_turn(
 
 def _print_welcome(config: dict) -> None:
     """タイプライター風アニメーションでウェルカムメッセージを表示する。"""
-    provider_label = "Azure OpenAI" if config.get("provider") == "azure" else "OpenRouter"
+    provider = config.get("provider", "openrouter")
+    provider_label = {
+        "azure": "Azure OpenAI",
+        "ollama": "Ollama (local)",
+        "lmstudio": "LM Studio (local)",
+    }.get(provider, "OpenRouter")
     emb_info = f"  ({config['embedding_model']})" if config.get("embedding_model") else ""
 
     segments = [
