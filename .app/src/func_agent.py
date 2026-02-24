@@ -249,7 +249,8 @@ class Agent:
             # エラーがあっても、受信済みのテキスト／ツール情報は保持する
             if text_content or pending_tool_calls:
                 assistant_msg: dict = {"role": "assistant"}
-                assistant_msg["content"] = text_content or None
+                # Ollama / LM Studio など一部のローカル LLM は null を拒否するため空文字にする
+                assistant_msg["content"] = text_content or ""
 
                 if pending_tool_calls:
                     assistant_msg["tool_calls"] = [

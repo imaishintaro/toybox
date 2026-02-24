@@ -197,7 +197,6 @@ TOOL_DEFINITIONS: list[dict] = [
                         "description": "隠しファイルを表示するか (デフォルト: false)",
                     },
                 },
-                "required": [],
             },
         },
     },
