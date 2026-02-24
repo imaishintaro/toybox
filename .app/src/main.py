@@ -443,18 +443,23 @@ def run_project(
 
     console.print()
 
-    # ── tmux セットアップ ────────────────────────────────────
+    # ── ランナー初期化 + 実行ディレクトリを事前作成 ──────────────
     agent_names = [a.agent_name for a in plan.agents]
     session_name = f"claw_{int(time.time()) % 10000}"
     python_bin = sys.executable
 
-    # ダミーの log_dir と board_path（実際の値は MultiAgentRunner が生成する）
-    # tmux は先に作るが、ログファイルは実行時に作られるので watch.py が待機する
-    import tempfile
-    tmp_log_dir = str(Path(sessions_dir) / "tmp_logs")
-    tmp_board = str(Path(sessions_dir) / "tmp_board.md")
-    Path(tmp_log_dir).mkdir(parents=True, exist_ok=True)
+    runner = MultiAgentRunner(
+        client=client,
+        work_dir=work_dir,
+        max_iterations=config["max_iterations"],
+        sessions_dir=sessions_dir,
+    )
 
+    # tmux セットアップより前にディレクトリを作成して実際のパスを取得する。
+    # こうすることで watch.py が正しいログファイルを監視できる。
+    log_dir, board_path = runner.prepare_run(plan)
+
+    # ── tmux セットアップ ────────────────────────────────────
     tmux_available = tmux.is_available()
     tmux_session = None
 
@@ -463,8 +468,8 @@ def run_project(
             tmux_session = tmux.setup_project_session(
                 session_name=session_name,
                 agent_names=agent_names,
-                log_dir=tmp_log_dir,
-                board_path=tmp_board,
+                log_dir=log_dir,
+                board_path=board_path,
                 work_dir=work_dir,
                 python_bin=python_bin,
             )
@@ -482,14 +487,6 @@ def run_project(
         console.print("[dim]tmux が利用できません（ログはファイルに保存されます）[/dim]")
 
     console.print()
-
-    # ── エージェント実行（Live UI 付き） ───────────────────────
-    runner = MultiAgentRunner(
-        client=client,
-        work_dir=work_dir,
-        max_iterations=config["max_iterations"],
-        sessions_dir=sessions_dir,
-    )
 
     # 実行状況を表示するためのステート
     agent_status: dict[str, str] = {name: "待機中" for name in agent_names}
@@ -542,7 +539,7 @@ def run_project(
     def _run_in_thread() -> None:
         nonlocal results
         try:
-            results = runner.run(plan, event_callback=event_callback)
+            results = runner.execute_run(plan, log_dir, board_path, event_callback=event_callback)
         finally:
             run_done.set()
 
@@ -568,11 +565,8 @@ def run_project(
     console.print()
     _print_project_results(results, plan)
 
-    # ボードファイルのパスを出力（tmux セッションに表示されるはず）
-    if results:
-        # 最初の結果から board_path を推定（現状は summary 情報なし → runner から取る方法なし）
-        # 代わりに sessions_dir から最新ディレクトリを探す
-        _show_board_hint(sessions_dir, tmux_session)
+    # 共有ボードのパスを表示する
+    _show_board_hint(board_path, tmux_session)
 
 
 def _print_project_results(results: dict[str, dict], plan: ProjectPlan) -> None:
@@ -613,32 +607,18 @@ def _print_project_results(results: dict[str, dict], plan: ProjectPlan) -> None:
     console.print()
 
 
-def _show_board_hint(sessions_dir: str, tmux_session: str | None) -> None:
+def _show_board_hint(board_path: str, tmux_session: str | None) -> None:
     """共有ボードのパスヒントを表示する。"""
-    sessions_path = Path(sessions_dir)
-    if not sessions_path.exists():
+    if not Path(board_path).exists():
         return
 
-    # 最新の project_* ディレクトリを探す
-    project_dirs = sorted(
-        [d for d in sessions_path.iterdir() if d.is_dir() and d.name.startswith("project_")],
-        key=lambda d: d.stat().st_mtime,
-        reverse=True,
-    )
-    if not project_dirs:
-        return
-
-    board_path = project_dirs[0] / "board.md"
-    if board_path.exists():
+    console.print(f"[dim cyan]共有ボード: [bold]{board_path}[/bold][/dim cyan]")
+    if tmux_session:
         console.print(
-            f"[dim cyan]共有ボード: [bold]{board_path}[/bold][/dim cyan]"
+            f"[dim]  tmux セッション [bold]{tmux_session}[/bold] の shared ウィンドウで確認できます[/dim]"
         )
-        if tmux_session:
-            console.print(
-                f"[dim]  tmux セッション [bold]{tmux_session}[/bold] の shared ウィンドウで確認できます[/dim]"
-            )
-        else:
-            console.print(f"[dim]  cat {board_path}[/dim]")
+    else:
+        console.print(f"[dim]  cat {board_path}[/dim]")
     console.print()
 
 

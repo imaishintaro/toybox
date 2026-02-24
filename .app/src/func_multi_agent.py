@@ -251,27 +251,40 @@ class MultiAgentRunner:
         self.max_iterations = max_iterations
         self.sessions_dir = sessions_dir
 
-    def run(
+    def prepare_run(self, plan: ProjectPlan) -> tuple[str, str]:
+        """
+        実行前にディレクトリを作成して共有ボードを初期化する。
+
+        tmux セットアップより前に呼び出すことで、
+        ウォッチャーが正しいファイルパスを監視できる。
+
+        Returns:
+            (log_dir, board_path) のタプル
+        """
+        log_dir, board_path = self._setup_directories(plan)
+        self._init_board(board_path, plan.board_init)
+        logger.info("実行ディレクトリ作成: log_dir=%s, board=%s", log_dir, board_path)
+        return log_dir, board_path
+
+    def execute_run(
         self,
         plan: ProjectPlan,
+        log_dir: str,
+        board_path: str,
         event_callback=None,
     ) -> dict[str, dict]:
         """
-        計画に従ってエージェントを実行する。
+        prepare_run() で作成したディレクトリでエージェントを実行する。
 
         Args:
             plan: ProjectPlan オブジェクト
+            log_dir: prepare_run() が返したログディレクトリ
+            board_path: prepare_run() が返した共有ボードパス
             event_callback: イベントコールバック (event_type, agent_name, data)
 
         Returns:
             {agent_name: result_dict} の辞書
         """
-        # ログ・ボードディレクトリ作成
-        log_dir, board_path = self._setup_directories(plan)
-
-        # 共有ボードを初期化
-        self._init_board(board_path, plan.board_init)
-
         logger.info(
             "マルチエージェント実行開始: %d エージェント (%s)",
             len(plan.agents),
@@ -283,10 +296,29 @@ class MultiAgentRunner:
         else:
             results = self._run_sequential(plan, log_dir, board_path, event_callback)
 
-        # 最終サマリーをボードに書き込む
         self._write_summary(board_path, results)
-
         return results
+
+    def run(
+        self,
+        plan: ProjectPlan,
+        event_callback=None,
+    ) -> dict[str, dict]:
+        """
+        計画に従ってエージェントを実行する（後方互換メソッド）。
+
+        tmux 連携が不要な場合は直接このメソッドを呼び出せる。
+        tmux ウォッチャーと連携する場合は prepare_run() → tmux setup → execute_run() の順で呼ぶこと。
+
+        Args:
+            plan: ProjectPlan オブジェクト
+            event_callback: イベントコールバック (event_type, agent_name, data)
+
+        Returns:
+            {agent_name: result_dict} の辞書
+        """
+        log_dir, board_path = self.prepare_run(plan)
+        return self.execute_run(plan, log_dir, board_path, event_callback)
 
     def _setup_directories(self, plan: ProjectPlan) -> tuple[str, str]:
         """ログ・ボードのディレクトリを準備する。"""

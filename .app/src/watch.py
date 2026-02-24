@@ -30,7 +30,8 @@ def watch_plain(file_path: str, title: str) -> None:
     print("-" * 60)
 
     path = Path(file_path)
-    last_size = 0
+    last_size = 0   # バイトサイズ（変更検知用）
+    last_pos = 0    # 文字数（スライス用: マルチバイト文字に対応）
 
     while True:
         try:
@@ -41,10 +42,11 @@ def watch_plain(file_path: str, title: str) -> None:
             size = path.stat().st_size
             if size > last_size:
                 with path.open("r", encoding="utf-8", errors="replace") as f:
-                    f.seek(last_size)
-                    new_content = f.read()
+                    content = f.read()
+                new_content = content[last_pos:]
                 if new_content:
                     print(new_content, end="", flush=True)
+                last_pos = len(content)
                 last_size = size
             time.sleep(0.5)
         except KeyboardInterrupt:
@@ -76,18 +78,14 @@ def watch_rich(file_path: str, title: str) -> None:
     )
     console.print(Rule(style="dim"))
 
-    # ファイルが存在するまで待機
-    wait_count = 0
-    while not path.exists():
-        if wait_count % 10 == 0:
-            console.print(f"[dim]ファイル待機中... {file_path}[/dim]", end="\r")
-        time.sleep(0.5)
-        wait_count += 1
+    # ファイルが存在するまで待機（1回だけ表示）
+    if not path.exists():
+        console.print(f"[dim]エージェント起動待機中...[/dim]")
+        while not path.exists():
+            time.sleep(0.5)
 
-    console.print()  # 改行
-
-    last_size = 0
-    displayed_lines: list[str] = []
+    last_size = 0   # バイトサイズ（変更検知用）
+    last_pos = 0    # 文字数（スライス用: マルチバイト文字に対応）
 
     # ボードファイル（.md 拡張子）か判定
     is_board = file_path.endswith(".md")
@@ -121,11 +119,12 @@ def watch_rich(file_path: str, title: str) -> None:
                     except Exception:
                         console.print(content)
                 else:
-                    # ログファイルは差分だけ追記表示
-                    new_content = content[last_size:] if last_size > 0 else content
+                    # ログファイルは差分だけ追記表示（文字数でスライス）
+                    new_content = content[last_pos:]
                     lines = new_content.splitlines()
                     for line in lines:
                         _print_log_line(console, line)
+                    last_pos = len(content)
 
                 last_size = size
 
