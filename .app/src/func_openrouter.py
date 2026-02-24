@@ -1,10 +1,9 @@
 """
-OpenRouter APIクライアントモジュール。
+チャット API クライアントモジュール。
 
-修正済みバグ:
-  - タイムアウト未設定 → httpx.Timeout を設定
-  - リトライが途中yield後にバッファリセット → 接続フェーズのみリトライ
-  - エラー後 return なし → 明示的 return を追加
+OpenRouter と Azure OpenAI の両方に対応。
+ストリーミングロジックは _BaseChatClient に集約し、
+OpenRouterClient / AzureOpenAIClient がそれを継承する。
 """
 import logging
 import time
@@ -12,19 +11,19 @@ from dataclasses import dataclass
 from typing import Any, Generator
 
 import httpx
-from openai import OpenAI
+from openai import OpenAI, AzureOpenAI
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# 接続リトライ設定（ストリーミング開始前のみ有効）
+# 接続リトライ設定
 MAX_CONNECT_RETRIES = 3
-RETRY_WAIT_BASE = 1.5  # 秒（指数バックオフの基数）
+RETRY_WAIT_BASE = 1.5
 
 # タイムアウト設定
-CONNECT_TIMEOUT = 15.0   # 接続確立
-READ_TIMEOUT = 60.0      # チャンク間の最大待機（これを超えると hung と判定）
+CONNECT_TIMEOUT = 15.0
+READ_TIMEOUT = 60.0
 WRITE_TIMEOUT = 15.0
 
 
@@ -33,43 +32,35 @@ class StreamEvent:
     """ストリームから生成されるイベント。"""
 
     type: str
-    # "text_delta"      : str  テキストチャンク（逐次）
-    # "text_done"       : str  テキスト全体（ストリーム完了後）
-    # "tool_call_ready" : dict {id, name, arguments}  ツール呼び出し1件
+    # "text_delta"      : str   テキストチャンク（逐次）
+    # "text_done"       : str   テキスト全体（ストリーム完了後）
+    # "tool_call_ready" : dict  {id, name, arguments}  ツール呼び出し1件
     # "stream_done"     : None  正常終了
-    # "error"           : str  エラーメッセージ
+    # "error"           : str   エラーメッセージ
     data: Any
 
 
-class OpenRouterClient:
-    """OpenRouter APIクライアント（ストリーミング対応）。"""
-
-    def __init__(self, api_key: str, model: str) -> None:
-        """
-        クライアントを初期化する。
-
-        Args:
-            api_key: OpenRouter APIキー
-            model: 使用するモデル (例: anthropic/claude-3.5-sonnet)
-        """
-        self.model = model
-        self._client = OpenAI(
-            api_key=api_key,
-            base_url=OPENROUTER_BASE_URL,
-            # httpx タイムアウトを明示設定（ハング防止の要）
-            http_client=httpx.Client(
-                timeout=httpx.Timeout(
-                    connect=CONNECT_TIMEOUT,
-                    read=READ_TIMEOUT,
-                    write=WRITE_TIMEOUT,
-                    pool=CONNECT_TIMEOUT,
-                )
-            ),
-            default_headers={
-                "HTTP-Referer": "https://github.com/claw-agent",
-                "X-Title": "claw - Claude-Like Agent Workflow",
-            },
+def _make_httpx_client() -> httpx.Client:
+    """タイムアウト設定済みの httpx.Client を生成する。"""
+    return httpx.Client(
+        timeout=httpx.Timeout(
+            connect=CONNECT_TIMEOUT,
+            read=READ_TIMEOUT,
+            write=WRITE_TIMEOUT,
+            pool=CONNECT_TIMEOUT,
         )
+    )
+
+
+class _BaseChatClient:
+    """
+    OpenRouter / Azure OpenAI 共通のストリーミングロジック。
+
+    サブクラスは self.model と self._client を設定すること。
+    """
+
+    model: str
+    _client: Any  # openai.OpenAI または openai.AzureOpenAI
 
     def stream_events(
         self,
@@ -80,15 +71,9 @@ class OpenRouterClient:
         max_tokens: int = 8192,
     ) -> Generator[StreamEvent, None, None]:
         """
-        ストリーミングAPIを呼び出し、構造化イベントを生成するジェネレータ。
+        ストリーミング API を呼び出し、構造化イベントを yield するジェネレータ。
 
-        設計方針:
-          - 接続フェーズ（stream オブジェクト取得まで）: MAX_CONNECT_RETRIES 回リトライ
-          - ストリーミングフェーズ: リトライしない（yield済みイベントと整合が取れないため）
-          - タイムアウト: httpx.Client で READ_TIMEOUT 秒ごとのチャンク到着を保証
-
-        Yields:
-            StreamEvent (type, data) タプルラッパー
+        接続フェーズのみリトライ。ストリーミング中はリトライしない。
         """
         full_messages = _build_messages(messages, system_prompt)
         kwargs: dict[str, Any] = {
@@ -104,7 +89,7 @@ class OpenRouterClient:
 
         # ── フェーズ1: 接続（リトライあり） ──────────────────────────────
         stream = None
-        last_connect_error: Exception | None = None
+        last_error: Exception | None = None
 
         for attempt in range(1, MAX_CONNECT_RETRIES + 1):
             try:
@@ -113,45 +98,39 @@ class OpenRouterClient:
                 logger.debug("API接続成功")
                 break
             except Exception as e:
-                last_connect_error = e
+                last_error = e
                 logger.warning(
-                    "接続失敗 (%d/%d): %s: %s",
-                    attempt,
-                    MAX_CONNECT_RETRIES,
-                    type(e).__name__,
-                    e,
+                    "接続失敗 (%d/%d): %s: %s", attempt, MAX_CONNECT_RETRIES, type(e).__name__, e
                 )
                 if attempt < MAX_CONNECT_RETRIES:
-                    wait = RETRY_WAIT_BASE * attempt
-                    logger.debug("%.1f秒後にリトライします", wait)
-                    time.sleep(wait)
+                    time.sleep(RETRY_WAIT_BASE * attempt)
 
         if stream is None:
-            msg = f"接続失敗（{MAX_CONNECT_RETRIES}回試行）: {type(last_connect_error).__name__}: {last_connect_error}"
+            msg = (
+                f"接続失敗（{MAX_CONNECT_RETRIES}回試行）: "
+                f"{type(last_error).__name__}: {last_error}"
+            )
             logger.error(msg)
             yield StreamEvent("error", msg)
-            return  # ← 必須: ジェネレータを明示的に終了
+            return
 
         # ── フェーズ2: ストリーミング受信（リトライなし） ─────────────────
         text_buffer = ""
-        tool_calls_acc: dict[int, dict] = {}   # index → {id, name, arguments}
+        tool_calls_acc: dict[int, dict] = {}
         chunk_count = 0
 
         try:
             for chunk in stream:
                 chunk_count += 1
-
                 if not chunk.choices:
                     continue
 
                 delta = chunk.choices[0].delta
 
-                # テキストチャンク
                 if delta.content:
                     text_buffer += delta.content
                     yield StreamEvent("text_delta", delta.content)
 
-                # ツール呼び出しデルタを蓄積
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:
                         idx = tc_delta.index
@@ -167,23 +146,19 @@ class OpenRouterClient:
 
             logger.debug(
                 "ストリーム完了: chunks=%d  text=%d chars  tools=%d",
-                chunk_count,
-                len(text_buffer),
-                len(tool_calls_acc),
+                chunk_count, len(text_buffer), len(tool_calls_acc),
             )
 
         except httpx.ReadTimeout:
-            # READ_TIMEOUT 秒間チャンクが来なかった場合
             msg = (
                 f"ストリームタイムアウト（{READ_TIMEOUT:.0f}秒間応答なし）。"
-                " APIが混雑している可能性があります。再度お試しください。"
+                " 再度お試しください。"
             )
             logger.error(msg)
-            # 受信済みテキストがあれば先に通知
             if text_buffer:
                 yield StreamEvent("text_done", text_buffer)
             yield StreamEvent("error", msg)
-            return  # ← 明示的終了
+            return
 
         except Exception as e:
             msg = f"ストリームエラー（{chunk_count}チャンク受信後）: {type(e).__name__}: {e}"
@@ -191,7 +166,7 @@ class OpenRouterClient:
             if text_buffer:
                 yield StreamEvent("text_done", text_buffer)
             yield StreamEvent("error", msg)
-            return  # ← 明示的終了
+            return
 
         # ── フェーズ3: 完成イベントを一括通知 ────────────────────────────
         if text_buffer:
@@ -201,7 +176,6 @@ class OpenRouterClient:
             yield StreamEvent("tool_call_ready", tool_calls_acc[idx])
 
         yield StreamEvent("stream_done", None)
-
 
     def chat_completion(
         self,
@@ -213,14 +187,7 @@ class OpenRouterClient:
         """
         非ストリーミングで API を呼び出してテキストを返す。
 
-        主にオーケストレーターの計画生成など、
-        JSON レスポンスが必要な場面で使用する。
-
-        Returns:
-            アシスタントの応答テキスト
-
-        Raises:
-            Exception: API 呼び出し失敗時
+        JSON レスポンスが必要な場面（オーケストレーターなど）で使用。
         """
         full_messages = _build_messages(messages, system_prompt)
         response = self._client.chat.completions.create(
@@ -231,11 +198,61 @@ class OpenRouterClient:
             stream=False,
         )
         content = response.choices[0].message.content or ""
-        logger.debug(
-            "chat_completion 完了: %d 文字",
-            len(content),
-        )
+        logger.debug("chat_completion 完了: %d 文字", len(content))
         return content
+
+
+class OpenRouterClient(_BaseChatClient):
+    """OpenRouter API クライアント。"""
+
+    def __init__(self, api_key: str, model: str) -> None:
+        self.model = model
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=OPENROUTER_BASE_URL,
+            http_client=_make_httpx_client(),
+            default_headers={
+                "HTTP-Referer": "https://github.com/claw-agent",
+                "X-Title": "claw - Claude-Like Agent Workflow",
+            },
+        )
+
+
+class AzureOpenAIClient(_BaseChatClient):
+    """Azure OpenAI API クライアント。"""
+
+    def __init__(
+        self,
+        api_key: str,
+        endpoint: str,
+        deployment: str,
+        api_version: str,
+    ) -> None:
+        self.model = deployment  # Azure ではデプロイ名がモデル名
+        self._client = AzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=endpoint,
+            api_version=api_version,
+            http_client=_make_httpx_client(),
+        )
+
+
+def create_chat_client(config: dict) -> _BaseChatClient:
+    """
+    設定に基づいてチャットクライアントを生成するファクトリ。
+
+    config["provider"] が "azure" なら AzureOpenAIClient、
+    それ以外（"openrouter"）なら OpenRouterClient を返す。
+    """
+    provider = config.get("provider", "openrouter")
+    if provider == "azure":
+        return AzureOpenAIClient(
+            api_key=config["api_key"],
+            endpoint=config["azure_endpoint"],
+            deployment=config["azure_deployment"],
+            api_version=config["azure_api_version"],
+        )
+    return OpenRouterClient(api_key=config["api_key"], model=config["model"])
 
 
 def _build_messages(messages: list[dict], system_prompt: str | None) -> list[dict]:

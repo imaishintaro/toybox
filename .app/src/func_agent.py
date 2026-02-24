@@ -26,6 +26,7 @@ from typing import Generator, Any
 
 from func_openrouter import OpenRouterClient
 from func_tools import TOOL_DEFINITIONS, execute_tool
+from func_embedding import EmbeddingClient, compress_conversation, COMPRESS_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class Agent:
         agent_name: str = "claw",
         role_system_prompt: str | None = None,
         board_path: str | None = None,
+        embedding_client: EmbeddingClient | None = None,
     ) -> None:
         self.client = client
         self.work_dir = work_dir
@@ -150,6 +152,7 @@ class Agent:
         self.agent_name = agent_name
         self.role_system_prompt = role_system_prompt
         self.board_path = board_path
+        self.embedding_client = embedding_client
         self.state = AgentState()
 
     def reset_conversation(self) -> None:
@@ -337,12 +340,21 @@ class Agent:
     def _get_messages_for_api(self) -> list[dict]:
         """
         API送信用メッセージリストを返す。
-        会話が長すぎる場合は古いメッセージを削除する。
+
+        embedding_client が設定されており、会話が COMPRESS_THRESHOLD を超えた場合は
+        埋め込みベースの圧縮を試みる。
+        それでも長い場合はフォールバックとして末尾トリミングを行う。
         """
         conv = self.state.conversation
+
+        # 埋め込み圧縮（embedding_client が設定されている場合のみ）
+        if self.embedding_client and len(conv) >= COMPRESS_THRESHOLD:
+            conv = compress_conversation(conv, self.embedding_client)
+
         if len(conv) <= MAX_CONVERSATION_MESSAGES:
             return conv
 
+        # フォールバック: 単純なトリミング
         first = conv[:1]
         recent = conv[-KEEP_RECENT_MESSAGES:]
         trimmed = first + recent

@@ -32,7 +32,8 @@ from rich import box
 sys.path.insert(0, str(Path(__file__).parent))
 
 from func_config import load_config
-from func_openrouter import OpenRouterClient
+from func_openrouter import OpenRouterClient, create_chat_client
+from func_embedding import create_embedding_client
 from func_agent import Agent, ToolCallResult
 from func_session import (
     save_session, load_session, list_sessions,
@@ -666,15 +667,22 @@ def _load_session_into_agent(agent: Agent, name: str) -> None:
 
 def _print_welcome(config: dict) -> None:
     """タイプライター風アニメーションでウェルカムメッセージを表示する。"""
+    provider_label = "Azure OpenAI" if config.get("provider") == "azure" else "OpenRouter"
+    emb_info = f"  ({config['embedding_model']})" if config.get("embedding_model") else ""
+
     segments = [
         ("claw", "bold cyan"),
         ("  Claude-Like Agent Workflow\n\n", ""),
+        ("  Provider ", "dim"),
+        (f"{provider_label}\n", "bold"),
         ("  Model   ", "dim"),
         (f"{config['model']}\n", "bold"),
         ("  WorkDir ", "dim"),
         (f"{config['work_dir']}\n", "bold"),
         ("  MaxIter ", "dim"),
-        (f"{config['max_iterations']}\n\n", "bold"),
+        (f"{config['max_iterations']}\n", "bold"),
+        ("  Compress ", "dim"),
+        (f"{'有効' + emb_info if config.get('embedding_model') else '無効'}\n\n", "bold"),
         ("/help でコマンド一覧  /exit で終了", "dim"),
     ]
 
@@ -729,11 +737,13 @@ def _offer_resume(agent: Agent) -> None:
 
 def run_repl(config: dict) -> None:
     """インタラクティブ REPL を実行する。"""
-    client = OpenRouterClient(api_key=config["api_key"], model=config["model"])
+    client = create_chat_client(config)
+    embedding_client = create_embedding_client(config)
     agent = Agent(
         client=client,
         work_dir=config["work_dir"],
         max_iterations=config["max_iterations"],
+        embedding_client=embedding_client,
     )
 
     _print_welcome(config)
