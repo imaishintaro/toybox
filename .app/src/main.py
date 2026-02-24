@@ -35,6 +35,7 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -68,6 +69,9 @@ def _kb_newline(event) -> None:
 
 _input_session: PromptSession = PromptSession(history=InMemoryHistory())
 _INPUT_PROMPT = ANSI("\033[1;36mYou\033[0m \033[2m›\033[0m ")
+
+# ツールバー・空白行の背景を端末デフォルト色に合わせる
+_PROMPT_STYLE = Style.from_dict({"bottom-toolbar": "bg:default noreverse"})
 
 # Live 更新の間引き設定（毎チャンク更新するとボトルネックになる）
 _LIVE_UPDATE_INTERVAL = 0.05  # 秒: この間隔より短い更新はスキップ
@@ -847,6 +851,7 @@ def run_repl(config: dict) -> None:
                 user_input = _input_session.prompt(
                     _INPUT_PROMPT,
                     bottom_toolbar=_bottom_toolbar,
+                    style=_PROMPT_STYLE,
                     multiline=True,
                     key_bindings=_input_kb,
                     prompt_continuation="  ",
