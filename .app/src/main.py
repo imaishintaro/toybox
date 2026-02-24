@@ -177,7 +177,7 @@ def run_agent_turn(
     with Live(
         _spinner("接続中...", 0, 0, 0),
         console=console,
-        refresh_per_second=15,
+        refresh_per_second=8,
         vertical_overflow="visible",
     ) as live:
         try:
@@ -228,13 +228,14 @@ def run_agent_turn(
                     case "error":
                         # エラー時も text_buffer を印刷してから表示をクリア
                         flush_text_buffer()
-                        console.print(f"[bold red]✗ エラー: {data}[/bold red]")
                         live.update(Text(""))
+                        console.print(f"[bold red]✗ エラー: {data}[/bold red]")
 
                     case "turn_done":
                         total = data
                         flush_text_buffer()  # 念のため残っていれば印刷
-                        live.update(
+                        live.update(Text(""))  # Live エリアをクリア
+                        console.print(
                             Text(
                                 f"  ✓ 完了  {total:.1f}s"
                                 f"  (iter {iteration}  tools {tool_count})",
@@ -245,7 +246,7 @@ def run_agent_turn(
         except KeyboardInterrupt:
             flush_text_buffer()
             live.update(Text(""))
-            console.print("\n[dim cyan]処理を中断しました。[/dim cyan]")
+            console.print("[dim cyan]処理を中断しました。[/dim cyan]")
 
         except Exception as e:
             flush_text_buffer()
@@ -664,22 +665,38 @@ def _load_session_into_agent(agent: Agent, name: str) -> None:
 
 
 def _print_welcome(config: dict) -> None:
-    console.print()
-    console.print(
-        Panel(
-            Text.from_markup(
-                "[bold cyan]claw[/bold cyan]  Claude-Like Agent Workflow\n\n"
-                f"  Model   [bold]{config['model']}[/bold]\n"
-                f"  WorkDir [bold]{config['work_dir']}[/bold]\n"
-                f"  MaxIter [bold]{config['max_iterations']}[/bold]\n"
-                f"  Env     [dim]{config['env_path']}[/dim]\n\n"
-                "[dim]/help でコマンド一覧  /exit で終了[/dim]"
-            ),
+    """タイプライター風アニメーションでウェルカムメッセージを表示する。"""
+    segments = [
+        ("claw", "bold cyan"),
+        ("  Claude-Like Agent Workflow\n\n", ""),
+        ("  Model   ", "dim"),
+        (f"{config['model']}\n", "bold"),
+        ("  WorkDir ", "dim"),
+        (f"{config['work_dir']}\n", "bold"),
+        ("  MaxIter ", "dim"),
+        (f"{config['max_iterations']}\n\n", "bold"),
+        ("/help でコマンド一覧  /exit で終了", "dim"),
+    ]
+
+    def _welcome_panel(content: Text) -> Panel:
+        return Panel(
+            content,
             title="[bold cyan]✨ claw[/bold cyan]",
             border_style="cyan",
             padding=(0, 2),
         )
-    )
+
+    console.print()
+    revealed = Text()
+
+    with Live(_welcome_panel(revealed), console=console, refresh_per_second=30) as live:
+        for text, style in segments:
+            for char in text:
+                revealed.append(char, style=style or None)
+                live.update(_welcome_panel(revealed))
+                time.sleep(0.012)
+
+    console.print(_welcome_panel(revealed))
     console.print()
 
 
