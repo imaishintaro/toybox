@@ -144,6 +144,33 @@ def run_agent_turn(
     def elapsed() -> float:
         return time.time() - start_time
 
+    # ── ダイナミックレンダラー ───────────────────────────────────────
+    # Live に渡すレンダラブル。__rich_console__ は refresh のたびに呼ばれるため、
+    # spinner モード時は elapsed() を毎回再計算して秒数がリアルタイムに進む。
+    class _Renderer:
+        def __init__(self) -> None:
+            self._static: object = Text("")
+            self._is_spinner: bool = True
+            self.msg: str = "接続中..."
+
+        def set_spinner(self, msg: str) -> None:
+            """スピナーモードに切り替え（秒数は refresh ごとに自動更新）。"""
+            self.msg = msg
+            self._is_spinner = True
+
+        def set_static(self, renderable: object) -> None:
+            """静的レンダラブルを表示（テキストパネル / 空白）。"""
+            self._static = renderable
+            self._is_spinner = False
+
+        def __rich_console__(self, console, options):  # noqa: ANN001
+            if self._is_spinner:
+                yield _spinner(self.msg, iteration, tool_count, elapsed())
+            else:
+                yield self._static
+
+    renderer = _Renderer()
+
     def flush_text_buffer() -> None:
         """text_buffer の内容を永続パネルとして表示しバッファをクリアする。
 
@@ -152,7 +179,8 @@ def run_agent_turn(
         """
         nonlocal text_buffer
         if text_buffer:
-            live.update(Text(""))  # Live クリア → リフレッシュ競合を防止
+            renderer.set_static(Text(""))
+            live.refresh()
             console.print(_text_panel(text_buffer, streaming=False))
             text_buffer = ""
 
@@ -163,7 +191,7 @@ def run_agent_turn(
     _PREVIEW_LINES = max(10, shutil.get_terminal_size(fallback=(80, 24)).lines - 6)
 
     with Live(
-        _spinner("接続中...", 0, 0, 0),
+        renderer,
         console=console,
         refresh_per_second=8,
         vertical_overflow="crop",
@@ -175,8 +203,7 @@ def run_agent_turn(
                     case "api_start":
                         iteration = data
                         tool_count = agent.stats["tool_call_count"]
-                        live.update(_spinner("思考中...", iteration, tool_count, elapsed()))
-                        last_live_update = time.time()
+                        renderer.set_spinner("思考中...")
 
                     case "text_delta":
                         text_buffer += data
@@ -193,7 +220,7 @@ def run_agent_turn(
                                 )
                             else:
                                 preview = text_buffer
-                            live.update(_text_panel(preview, streaming=True))
+                            renderer.set_static(_text_panel(preview, streaming=True))
                             last_live_update = now
 
                     case "text_done":
@@ -201,23 +228,23 @@ def run_agent_turn(
                         text_buffer = data or text_buffer
                         flush_text_buffer()
                         tool_count = agent.stats["tool_call_count"]
-                        live.update(
-                            _spinner("次のアクションを考えています...", iteration, tool_count, elapsed())
-                        )
+                        renderer.set_spinner("次のアクションを考えています...")
 
                     case "tool_call_start":
                         tc = data
-                        flush_text_buffer()   # テキストが残っていれば先に確定（内部で Live クリア済み）
-                        live.update(Text(""))  # flush が no-op のときも Live をクリア
+                        flush_text_buffer()   # テキストが残っていれば先に確定
+                        renderer.set_static(Text(""))
+                        live.refresh()
                         console.print(_tool_call_panel(tc))
-                        live.update(_spinner(f"⚙ {tc['name']} 実行中...", iteration, tool_count, elapsed()))
+                        renderer.set_spinner(f"⚙ {tc['name']} 実行中...")
 
                     case "tool_result":
                         result: ToolCallResult = data
                         tool_count += 1
-                        live.update(Text(""))  # console.print 前に Live をクリア
+                        renderer.set_static(Text(""))
+                        live.refresh()
                         console.print(_tool_result_panel(result))
-                        live.update(_spinner("結果を分析中...", iteration, tool_count, elapsed()))
+                        renderer.set_spinner("結果を分析中...")
 
                     case "max_iterations":
                         console.print(
@@ -228,13 +255,15 @@ def run_agent_turn(
                     case "error":
                         # エラー時も text_buffer を印刷してから表示をクリア
                         flush_text_buffer()
-                        live.update(Text(""))
+                        renderer.set_static(Text(""))
+                        live.refresh()
                         console.print(f"[bold red]✗ エラー: {data}[/bold red]")
 
                     case "turn_done":
                         total = data
                         flush_text_buffer()  # 念のため残っていれば印刷
-                        live.update(Text(""))  # Live エリアをクリア
+                        renderer.set_static(Text(""))
+                        live.refresh()
                         console.print(
                             Text(
                                 f"  ✓ 完了  {total:.1f}s"
@@ -245,12 +274,12 @@ def run_agent_turn(
 
         except KeyboardInterrupt:
             flush_text_buffer()
-            live.update(Text(""))
+            renderer.set_static(Text(""))
             console.print("[dim cyan]処理を中断しました。[/dim cyan]")
 
         except Exception as e:
             flush_text_buffer()
-            live.update(Text(""))
+            renderer.set_static(Text(""))
             console.print(f"[bold red]予期しないエラー: {type(e).__name__}: {e}[/bold red]")
             logger.exception("エージェントターン中に予期しないエラー")
 
