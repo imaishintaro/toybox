@@ -43,6 +43,7 @@ from func_openrouter import OpenRouterClient, create_chat_client
 from func_embedding import create_embedding_client
 from func_agent import Agent, ToolCallResult, MAX_CONVERSATION_MESSAGES
 from func_session import (
+    init as session_init,
     save_session, load_session, list_sessions,
     delete_session, autosave_exists, AUTOSAVE_NAME,
 )
@@ -447,7 +448,8 @@ def run_project(
     5. 結果を表示
     """
     work_dir = config["work_dir"]
-    sessions_dir = str(Path(__file__).parent.parent / "sessions")
+    # マルチエージェントのログ・ボードも work_dir/.claw/ 以下に保存する
+    sessions_dir = str(Path(work_dir) / ".claw")
 
     # ── 計画生成 ──────────────────────────────────────────────
     console.print()
@@ -777,6 +779,9 @@ def _offer_resume(agent: Agent) -> None:
 
 def run_repl(config: dict) -> None:
     """インタラクティブ REPL を実行する。"""
+    # セッションディレクトリを work_dir/.claw/sessions/ に設定
+    session_init(config["work_dir"])
+
     client = create_chat_client(config)
     embedding_client = create_embedding_client(config)
     agent = Agent(

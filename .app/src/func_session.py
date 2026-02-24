@@ -2,7 +2,9 @@
 セッション保存・復元モジュール。
 
 会話履歴をJSONファイルに保存し、中断後も再開できるようにする。
-セッションファイルは .app/sessions/ に保存される。
+
+セッションディレクトリは init(work_dir) で設定する。
+保存先: <work_dir>/.claw/sessions/<name>.json
 """
 import json
 import logging
@@ -11,9 +13,32 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# セッション保存ディレクトリ (.app/sessions/)
-SESSIONS_DIR = Path(__file__).parent.parent / "sessions"
 AUTOSAVE_NAME = "autosave"
+
+# init() で設定されるセッションディレクトリ
+# 未設定時は __file__ 起点のフォールバックを使う（後方互換）
+_sessions_dir: Path | None = None
+
+
+def init(work_dir: str) -> None:
+    """
+    セッションディレクトリをワークディレクトリ内に設定する。
+
+    run_repl() の開始時に一度だけ呼び出す。
+    これ以降の save/load/list/delete/autosave_exists は
+    <work_dir>/.claw/sessions/ を対象とする。
+    """
+    global _sessions_dir
+    _sessions_dir = Path(work_dir) / ".claw" / "sessions"
+    logger.debug("セッションディレクトリ: %s", _sessions_dir)
+
+
+def _get_dir() -> Path:
+    """セッションディレクトリを返す（未初期化時はフォールバック）。"""
+    if _sessions_dir is not None:
+        return _sessions_dir
+    # フォールバック: 旧来の .app/sessions/
+    return Path(__file__).parent.parent / "sessions"
 
 
 def save_session(
@@ -34,9 +59,9 @@ def save_session(
     Returns:
         保存したファイルのパス
     """
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    sessions_dir = _get_dir()
+    sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    # セッションデータ
     data = {
         "version": 1,
         "saved_at": datetime.now().isoformat(),
@@ -46,7 +71,7 @@ def save_session(
         "conversation": conversation,
     }
 
-    path = SESSIONS_DIR / f"{name}.json"
+    path = sessions_dir / f"{name}.json"
     path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -65,7 +90,7 @@ def load_session(name: str = AUTOSAVE_NAME) -> dict | None:
     Returns:
         セッションデータ辞書、見つからない場合は None
     """
-    path = SESSIONS_DIR / f"{name}.json"
+    path = _get_dir() / f"{name}.json"
     if not path.exists():
         return None
 
@@ -88,7 +113,7 @@ def delete_session(name: str) -> bool:
     Returns:
         削除成功なら True
     """
-    path = SESSIONS_DIR / f"{name}.json"
+    path = _get_dir() / f"{name}.json"
     if path.exists():
         path.unlink()
         return True
@@ -102,19 +127,19 @@ def list_sessions() -> list[dict]:
     Returns:
         セッション情報の辞書リスト
     """
-    if not SESSIONS_DIR.exists():
+    sessions_dir = _get_dir()
+    if not sessions_dir.exists():
         return []
 
     sessions: list[dict] = []
     for path in sorted(
-        SESSIONS_DIR.glob("*.json"),
+        sessions_dir.glob("*.json"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     ):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             saved_at = data.get("saved_at", "")
-            # 表示用に日時をフォーマット
             try:
                 dt = datetime.fromisoformat(saved_at)
                 saved_at_display = dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -137,4 +162,4 @@ def list_sessions() -> list[dict]:
 
 def autosave_exists() -> bool:
     """自動保存ファイルが存在するか確認する。"""
-    return (SESSIONS_DIR / f"{AUTOSAVE_NAME}.json").exists()
+    return (_get_dir() / f"{AUTOSAVE_NAME}.json").exists()
