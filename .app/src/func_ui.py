@@ -171,17 +171,29 @@ def run_agent_turn(
 
     renderer = _Renderer()
 
-    def flush_text_buffer() -> None:
-        """text_buffer の内容を永続パネルとして表示しバッファをクリアする。
+    def _live_print(renderable: object) -> None:
+        """Live コンテキスト内で永続出力を行うヘルパー。
 
-        console.print() の前に Live をクリアすることで、バックグラウンドの
-        リフレッシュスレッドとの出力競合によるパネル崩れを防ぐ。
+        live.update(Text("")) で Live の保持レンダラブルを空にしてから
+        console.print() を呼ぶことで、Rich の内部高さトラッキングが正しく
+        機能し、パネルが正しい位置に表示される。
+        出力後は live.update(renderer) で renderer を復元する。
+
+        注意: 例外ハンドラ内など Live 終了直前の呼び出しでは
+              restore=False を指定して復元を省略できる。
         """
+        live.update(Text(""))       # Live クリア → console.print の高さ計算を正確にする
+        console.print(renderable)
+        live.update(renderer)       # renderer を復元（スピナーの動的更新を維持）
+
+    def flush_text_buffer(restore: bool = True) -> None:
+        """text_buffer の内容を永続パネルとして表示しバッファをクリアする。"""
         nonlocal text_buffer
         if text_buffer:
-            renderer.set_static(Text(""))
-            live.refresh()
+            live.update(Text(""))
             console.print(_text_panel(text_buffer, streaming=False))
+            if restore:
+                live.update(renderer)
             text_buffer = ""
 
     console.print()
@@ -230,40 +242,41 @@ def run_agent_turn(
                         tool_count = agent.stats["tool_call_count"]
                         renderer.set_spinner("次のアクションを考えています...")
 
+                    case "truncated":
+                        # モデルが max_tokens に達して応答が途中で打ち切られた
+                        _live_print(
+                            "[dim yellow]⚠ 応答が最大トークン数で打ち切られました。"
+                            " 続きが必要な場合は「続けて」と入力してください。[/dim yellow]"
+                        )
+
                     case "tool_call_start":
                         tc = data
                         flush_text_buffer()   # テキストが残っていれば先に確定
-                        renderer.set_static(Text(""))
-                        live.refresh()
-                        console.print(_tool_call_panel(tc))
+                        _live_print(_tool_call_panel(tc))
                         renderer.set_spinner(f"⚙ {tc['name']} 実行中...")
 
                     case "tool_result":
                         result: ToolCallResult = data
                         tool_count += 1
-                        renderer.set_static(Text(""))
-                        live.refresh()
-                        console.print(_tool_result_panel(result))
+                        _live_print(_tool_result_panel(result))
                         renderer.set_spinner("結果を分析中...")
 
                     case "max_iterations":
-                        console.print(
+                        _live_print(
                             f"[bold yellow]⚠ 最大反復回数 ({data}) に達しました。"
                             " タスクが完了していない可能性があります。[/bold yellow]"
                         )
 
                     case "error":
                         # エラー時も text_buffer を印刷してから表示をクリア
-                        flush_text_buffer()
-                        renderer.set_static(Text(""))
-                        live.refresh()
+                        flush_text_buffer(restore=False)
+                        live.update(Text(""))
                         console.print(f"[bold red]✗ エラー: {data}[/bold red]")
 
                     case "turn_done":
                         total = data
-                        flush_text_buffer()  # 念のため残っていれば印刷
-                        renderer.set_static(Text(""))
-                        live.refresh()
+                        flush_text_buffer(restore=False)
+                        live.update(Text(""))
                         console.print(
                             Text(
                                 f"  ✓ 完了  {total:.1f}s"
@@ -273,13 +286,13 @@ def run_agent_turn(
                         )
 
         except KeyboardInterrupt:
-            flush_text_buffer()
-            renderer.set_static(Text(""))
+            flush_text_buffer(restore=False)
+            live.update(Text(""))
             console.print("[dim cyan]処理を中断しました。[/dim cyan]")
 
         except Exception as e:
-            flush_text_buffer()
-            renderer.set_static(Text(""))
+            flush_text_buffer(restore=False)
+            live.update(Text(""))
             console.print(f"[bold red]予期しないエラー: {type(e).__name__}: {e}[/bold red]")
             logger.exception("エージェントターン中に予期しないエラー")
 

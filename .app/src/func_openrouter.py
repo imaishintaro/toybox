@@ -118,6 +118,7 @@ class _BaseChatClient:
         text_buffer = ""
         tool_calls_acc: dict[int, dict] = {}
         chunk_count = 0
+        finish_reason: str | None = None
 
         try:
             for chunk in stream:
@@ -125,7 +126,12 @@ class _BaseChatClient:
                 if not chunk.choices:
                     continue
 
-                delta = chunk.choices[0].delta
+                choice = chunk.choices[0]
+                delta = choice.delta
+
+                # finish_reason は通常ストリームの最終チャンクに設定される
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
 
                 if delta.content:
                     text_buffer += delta.content
@@ -171,6 +177,11 @@ class _BaseChatClient:
         # ── フェーズ3: 完成イベントを一括通知 ────────────────────────────
         if text_buffer:
             yield StreamEvent("text_done", text_buffer)
+
+        # max_tokens に達して応答が途中で打ち切られた場合に通知
+        if finish_reason == "length":
+            logger.warning("応答が max_tokens に達して打ち切られました")
+            yield StreamEvent("truncated", None)
 
         for idx in sorted(tool_calls_acc.keys()):
             yield StreamEvent("tool_call_ready", tool_calls_acc[idx])

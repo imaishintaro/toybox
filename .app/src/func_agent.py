@@ -212,6 +212,9 @@ class Agent:
                         # text_done の data を正とする（main側のバッファと同期）
                         yield ("text_done", ev.data)
 
+                    case "truncated":
+                        yield ("truncated", None)
+
                     case "tool_call_ready":
                         pending_tool_calls.append(ev.data)
 
