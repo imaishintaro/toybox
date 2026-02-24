@@ -32,7 +32,7 @@ from rich import box
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.formatted_text import ANSI, HTML, FormattedText
+from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
 from prompt_toolkit.key_binding import KeyBindings
 
@@ -67,14 +67,7 @@ def _kb_newline(event) -> None:
     event.current_buffer.newline()
 
 _input_session: PromptSession = PromptSession(history=InMemoryHistory())
-
-# 2行入力欄: 1行目は "You ›" ラベル、2行目が実際の入力行
-# Alt+Enter で3行目以降に追加できる
-_INPUT_PROMPT = FormattedText([
-    ("bold ansicyan", "You"),
-    ("ansigray", " ›"),
-    ("", "\n  "),          # ← 改行してインデント: 入力はここから
-])
+_INPUT_PROMPT = ANSI("\033[1;36mYou\033[0m \033[2m›\033[0m ")
 
 # Live 更新の間引き設定（毎チャンク更新するとボトルネックになる）
 _LIVE_UPDATE_INTERVAL = 0.05  # 秒: この間隔より短い更新はスキップ
@@ -753,7 +746,6 @@ def _print_welcome(config: dict) -> None:
                 live.update(_welcome_panel(revealed))
                 time.sleep(0.012)
 
-    console.print(_welcome_panel(revealed))
     console.print()
 
 
@@ -837,6 +829,7 @@ def run_repl(config: dict) -> None:
         tokens_str = f"{tokens:,}"
         window_str = f"{ctx_window:,}"
         return HTML(
+            f"\n"
             f"  <b>{model_label}</b>"
             f"  <ansibrightblack>  context</ansibrightblack>"
             f"  <{color}>{bar}</{color}>"
