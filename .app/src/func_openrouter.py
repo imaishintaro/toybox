@@ -184,7 +184,9 @@ class _BaseChatClient:
             yield StreamEvent("truncated", None)
 
         for idx in sorted(tool_calls_acc.keys()):
-            yield StreamEvent("tool_call_ready", tool_calls_acc[idx])
+            tc = tool_calls_acc[idx]
+            tc["name"] = tc["name"].strip()  # モデルが先頭/末尾スペースを送ることがある
+            yield StreamEvent("tool_call_ready", tc)
 
         yield StreamEvent("stream_done", None)
 

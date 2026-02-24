@@ -253,6 +253,7 @@ def execute_tool(
     Returns:
         ツール実行結果の文字列
     """
+    name = name.strip()  # モデルが先頭/末尾スペースを付けることがある
     try:
         match name:
             case "read_file":
