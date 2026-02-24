@@ -29,6 +29,11 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich import box
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from func_config import load_config
@@ -45,6 +50,10 @@ import func_tmux as tmux
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+# 入力欄を画面下部に固定するためのセッション（↑↓ キーで履歴移動も可能）
+_input_session: PromptSession = PromptSession(history=InMemoryHistory())
+_INPUT_PROMPT = ANSI("\033[1;36mYou\033[0m \033[2m›\033[0m ")
 
 # Live 更新の間引き設定（毎チャンク更新するとボトルネックになる）
 _LIVE_UPDATE_INTERVAL = 0.05  # 秒: この間隔より短い更新はスキップ
@@ -770,7 +779,11 @@ def run_repl(config: dict) -> None:
     while True:
         try:
             console.print(Rule(style="dim"))
-            user_input = Prompt.ask("[bold cyan]You[/bold cyan]", console=console).strip()
+
+            # pt_patch_stdout により、Rich の出力がプロンプト行の上に表示される。
+            # これにより入力欄が画面の最下部に固定される。
+            with pt_patch_stdout(raw=True):
+                user_input = _input_session.prompt(_INPUT_PROMPT).strip()
 
             if not user_input:
                 continue
@@ -787,9 +800,9 @@ def run_repl(config: dict) -> None:
             )
 
         except KeyboardInterrupt:
-            console.print("\n[dim cyan](Ctrl+C) 終了するには /exit を入力してください。[/dim cyan]")
+            console.print("[dim cyan](Ctrl+C) 終了するには /exit を入力してください。[/dim cyan]")
         except EOFError:
-            console.print("\n[dim]終了します。[/dim]")
+            console.print("[dim]終了します。[/dim]")
             break
         except Exception as e:
             console.print(f"[bold red]REPL エラー: {type(e).__name__}: {e}[/bold red]")
