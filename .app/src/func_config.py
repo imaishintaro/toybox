@@ -4,6 +4,34 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+# モデルごとのコンテキストウィンドウサイズ（トークン数）
+# CONTEXT_WINDOW 環境変数で上書き可能
+_CONTEXT_WINDOWS: dict[str, int] = {
+    # Anthropic
+    "anthropic/claude-3.5-sonnet":          200_000,
+    "anthropic/claude-3.5-haiku":           200_000,
+    "anthropic/claude-3-opus":              200_000,
+    "anthropic/claude-3-haiku":             200_000,
+    "anthropic/claude-3-sonnet":            200_000,
+    # OpenAI
+    "openai/gpt-4o":                        128_000,
+    "openai/gpt-4o-mini":                   128_000,
+    "openai/gpt-4-turbo":                   128_000,
+    "openai/gpt-4":                         128_000,
+    "openai/gpt-3.5-turbo":                  16_000,
+    # Google
+    "google/gemini-1.5-pro":              1_000_000,
+    "google/gemini-1.5-flash":            1_000_000,
+    "google/gemini-2.0-flash":            1_000_000,
+    # Meta
+    "meta-llama/llama-3.1-70b-instruct":  128_000,
+    "meta-llama/llama-3.1-405b-instruct": 128_000,
+    # Mistral
+    "mistralai/mistral-large":            128_000,
+    "mistralai/mistral-small":            128_000,
+}
+_DEFAULT_CONTEXT_WINDOW = 128_000
+
 
 def load_config() -> dict:
     """
@@ -71,6 +99,15 @@ def load_config() -> dict:
     # OpenRouter キーは埋め込み用に常に保持しておく
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
+    # コンテキストウィンドウサイズ（トークン数）
+    # CONTEXT_WINDOW 環境変数 → モデル別テーブル → デフォルト の順で解決
+    env_ctx = os.getenv("CONTEXT_WINDOW", "").strip()
+    context_window = (
+        int(env_ctx)
+        if env_ctx.isdigit()
+        else _CONTEXT_WINDOWS.get(model, _DEFAULT_CONTEXT_WINDOW)
+    )
+
     # ── 埋め込みモデル設定（省略可） ─────────────────────────────────
     # EMBEDDING_PROVIDER が未指定ならメインプロバイダーと同じにする
     embedding_provider = os.getenv("EMBEDDING_PROVIDER", provider).strip().lower()
@@ -116,6 +153,7 @@ def load_config() -> dict:
         "embedding_azure_api_version": embedding_azure_api_version,
         # その他
         "openrouter_api_key": openrouter_api_key,
+        "context_window": context_window,
     }
 
 

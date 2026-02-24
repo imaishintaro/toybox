@@ -16,6 +16,7 @@ import os
 import argparse
 import time
 import threading
+import shutil
 from pathlib import Path
 
 from rich.console import Console
@@ -33,6 +34,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
+from prompt_toolkit.key_binding import KeyBindings
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -51,7 +53,18 @@ import func_tmux as tmux
 console = Console()
 logger = logging.getLogger(__name__)
 
-# 入力欄を画面下部に固定するためのセッション（↑↓ キーで履歴移動も可能）
+# ── 入力欄（画面下部固定・2行対応） ────────────────────────────────
+# Enter = 送信 / Alt+Enter = 改行
+_input_kb = KeyBindings()
+
+@_input_kb.add("enter")
+def _kb_submit(event) -> None:
+    event.current_buffer.validate_and_handle()
+
+@_input_kb.add("escape", "enter")   # Alt+Enter
+def _kb_newline(event) -> None:
+    event.current_buffer.newline()
+
 _input_session: PromptSession = PromptSession(history=InMemoryHistory())
 _INPUT_PROMPT = ANSI("\033[1;36mYou\033[0m \033[2m›\033[0m ")
 
@@ -189,11 +202,15 @@ def run_agent_turn(
 
     console.print()
 
+    # ストリーミングプレビューで表示する最大行数（端末高さ - 余白）
+    # これにより Live エリアが端末をはみ出さず、カーソル位置が安定する。
+    _PREVIEW_LINES = max(10, shutil.get_terminal_size(fallback=(80, 24)).lines - 6)
+
     with Live(
         _spinner("接続中...", 0, 0, 0),
         console=console,
         refresh_per_second=8,
-        vertical_overflow="visible",
+        vertical_overflow="crop",
     ) as live:
         try:
             for event_type, data in agent.stream_run(user_input):
@@ -210,7 +227,14 @@ def run_agent_turn(
                         # 間引き: 前回更新から _LIVE_UPDATE_INTERVAL 秒経過した場合のみ更新
                         now = time.time()
                         if now - last_live_update >= _LIVE_UPDATE_INTERVAL:
-                            live.update(_text_panel(text_buffer, streaming=True))
+                            # 末尾 _PREVIEW_LINES 行のみ表示して Live エリアを端末高さ以内に収める。
+                            # text_done 後に完全なパネルを console.print() で出力する。
+                            lines = text_buffer.split("\n")
+                            if len(lines) > _PREVIEW_LINES:
+                                preview = f"[dim]…({len(lines) - _PREVIEW_LINES} 行省略)[/dim]\n" + "\n".join(lines[-_PREVIEW_LINES:])
+                            else:
+                                preview = text_buffer
+                            live.update(_text_panel(preview, streaming=True))
                             last_live_update = now
 
                     case "text_done":
@@ -777,20 +801,35 @@ def run_repl(config: dict) -> None:
         _offer_resume(agent)
 
     model_label = config["model"]
+    ctx_window = config.get("context_window", 128_000)
+
+    def _estimate_tokens() -> int:
+        """会話の推定トークン数を返す（文字数 ÷ 4、表示用途のみ）。"""
+        total = 0
+        for msg in agent.state.conversation:
+            content = msg.get("content") or ""
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                total += sum(len(c.get("text", "")) for c in content if isinstance(c, dict))
+        return total // 4
 
     def _bottom_toolbar() -> HTML:
         """入力欄の下に表示するステータスバーを生成する。"""
-        msgs = len(agent.state.conversation)
-        pct = msgs / MAX_CONVERSATION_MESSAGES
-        bar_width = 12
+        tokens = _estimate_tokens()
+        pct = min(tokens / ctx_window, 1.0)
+        bar_width = 14
         filled = round(pct * bar_width)
         bar = "█" * filled + "░" * (bar_width - filled)
         color = "ansired" if pct >= 0.8 else "ansiyellow" if pct >= 0.5 else "ansigreen"
+        tokens_str = f"{tokens:,}"
+        window_str = f"{ctx_window:,}"
         return HTML(
             f"  <b>{model_label}</b>"
-            f"  <ansibrightblack>context</ansibrightblack>"
+            f"  <ansibrightblack>  context</ansibrightblack>"
             f"  <{color}>{bar}</{color}>"
-            f"  <ansibrightblack>{msgs}/{MAX_CONVERSATION_MESSAGES}</ansibrightblack>"
+            f"  <ansibrightblack>~{tokens_str} / {window_str} tokens</ansibrightblack>"
+            f"  <ansibrightblack>  Alt+Enter で改行</ansibrightblack>"
         )
 
     while True:
@@ -803,6 +842,9 @@ def run_repl(config: dict) -> None:
                 user_input = _input_session.prompt(
                     _INPUT_PROMPT,
                     bottom_toolbar=_bottom_toolbar,
+                    multiline=True,
+                    key_bindings=_input_kb,
+                    prompt_continuation="  ",
                 ).strip()
 
             if not user_input:
