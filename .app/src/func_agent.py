@@ -288,15 +288,41 @@ class Agent:
         # while ループ正常終了 = max_iterations 到達
         yield ("max_iterations", self.max_iterations)
 
+    def _load_prompt_md(self) -> str | None:
+        """
+        作業ディレクトリの prompt.md を読み込む。
+
+        存在しない場合は None を返す。
+        ファイルが更新されても次の API 呼び出し時に反映される。
+        """
+        from pathlib import Path
+        path = Path(self.work_dir) / "prompt.md"
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                logger.warning("prompt.md の読み込みに失敗: %s", e)
+        return None
+
     def _build_system_prompt(self) -> str:
         """
         エージェント固有のシステムプロンプトを組み立てる。
 
-        role_system_prompt が設定されている場合は先頭に追加する。
+        組み立て順（上が高優先度）:
+          1. prompt.md の内容（ユーザー定義ルール）
+          2. role_system_prompt（エージェント固有の役割）
+          3. 共有ボード情報（マルチエージェント時）
+          4. SYSTEM_PROMPT（基本ルール）
         """
         parts = []
+
+        user_prompt = self._load_prompt_md()
+        if user_prompt:
+            parts.append(f"## User Instructions\n{user_prompt}")
+
         if self.role_system_prompt:
             parts.append(self.role_system_prompt)
+
         if self.board_path:
             parts.append(
                 f"\n## 共有ボード\n"
@@ -304,6 +330,7 @@ class Agent:
                 f"共有ボードファイル: {self.board_path}\n"
                 "重要な情報・完了報告は post_to_board ツールで共有ボードに投稿してください。"
             )
+
         parts.append(SYSTEM_PROMPT)
         return "\n\n".join(parts)
 

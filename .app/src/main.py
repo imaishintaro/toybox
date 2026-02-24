@@ -739,6 +739,14 @@ def run_repl(config: dict) -> None:
     _print_welcome(config)
     os.chdir(config["work_dir"])
 
+    # prompt.md が存在すれば通知する
+    prompt_md = Path(config["work_dir"]) / "prompt.md"
+    if prompt_md.exists():
+        console.print(
+            f"[dim cyan]📋 prompt.md を読み込みました: [bold]{prompt_md}[/bold][/dim cyan]"
+        )
+        console.print()
+
     if autosave_exists():
         _offer_resume(agent)
 
