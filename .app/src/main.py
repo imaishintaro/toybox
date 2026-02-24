@@ -167,9 +167,14 @@ def run_agent_turn(
         return time.time() - start_time
 
     def flush_text_buffer() -> None:
-        """text_buffer の内容を永続パネルとして表示しバッファをクリアする。"""
+        """text_buffer の内容を永続パネルとして表示しバッファをクリアする。
+
+        console.print() の前に Live をクリアすることで、バックグラウンドの
+        リフレッシュスレッドとの出力競合によるパネル崩れを防ぐ。
+        """
         nonlocal text_buffer
         if text_buffer:
+            live.update(Text(""))  # Live クリア → リフレッシュ競合を防止
             console.print(_text_panel(text_buffer, streaming=False))
             text_buffer = ""
 
@@ -210,13 +215,15 @@ def run_agent_turn(
 
                     case "tool_call_start":
                         tc = data
-                        flush_text_buffer()   # テキストが残っていれば先に確定
+                        flush_text_buffer()   # テキストが残っていれば先に確定（内部で Live クリア済み）
+                        live.update(Text(""))  # flush が no-op のときも Live をクリア
                         console.print(_tool_call_panel(tc))
                         live.update(_spinner(f"⚙ {tc['name']} 実行中...", iteration, tool_count, elapsed()))
 
                     case "tool_result":
                         result: ToolCallResult = data
                         tool_count += 1
+                        live.update(Text(""))  # console.print 前に Live をクリア
                         console.print(_tool_result_panel(result))
                         live.update(_spinner("結果を分析中...", iteration, tool_count, elapsed()))
 
