@@ -31,7 +31,7 @@ from rich import box
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from func_config import load_config
 from func_openrouter import OpenRouterClient, create_chat_client
 from func_embedding import create_embedding_client
-from func_agent import Agent, ToolCallResult
+from func_agent import Agent, ToolCallResult, MAX_CONVERSATION_MESSAGES
 from func_session import (
     save_session, load_session, list_sessions,
     delete_session, autosave_exists, AUTOSAVE_NAME,
@@ -776,6 +776,23 @@ def run_repl(config: dict) -> None:
     if autosave_exists():
         _offer_resume(agent)
 
+    model_label = config["model"]
+
+    def _bottom_toolbar() -> HTML:
+        """入力欄の下に表示するステータスバーを生成する。"""
+        msgs = len(agent.state.conversation)
+        pct = msgs / MAX_CONVERSATION_MESSAGES
+        bar_width = 12
+        filled = round(pct * bar_width)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        color = "ansired" if pct >= 0.8 else "ansiyellow" if pct >= 0.5 else "ansigreen"
+        return HTML(
+            f"  <b>{model_label}</b>"
+            f"  <ansibrightblack>context</ansibrightblack>"
+            f"  <{color}>{bar}</{color}>"
+            f"  <ansibrightblack>{msgs}/{MAX_CONVERSATION_MESSAGES}</ansibrightblack>"
+        )
+
     while True:
         try:
             console.print(Rule(style="dim"))
@@ -783,7 +800,10 @@ def run_repl(config: dict) -> None:
             # pt_patch_stdout により、Rich の出力がプロンプト行の上に表示される。
             # これにより入力欄が画面の最下部に固定される。
             with pt_patch_stdout(raw=True):
-                user_input = _input_session.prompt(_INPUT_PROMPT).strip()
+                user_input = _input_session.prompt(
+                    _INPUT_PROMPT,
+                    bottom_toolbar=_bottom_toolbar,
+                ).strip()
 
             if not user_input:
                 continue
