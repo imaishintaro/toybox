@@ -812,15 +812,26 @@ def run_repl(config: dict) -> None:
     ctx_window = config.get("context_window", 128_000)
 
     def _estimate_tokens() -> int:
-        """会話の推定トークン数を返す（文字数 ÷ 4、表示用途のみ）。"""
-        total = 0
+        """会話の推定トークン数を返す（表示用途のみ）。
+
+        英語: 4文字 ≈ 1トークン
+        日本語・CJK: 1文字 ≈ 1トークン
+        （ASCII 以外は文字あたりのトークン数が多いため別計算）
+        """
+        ascii_chars = 0
+        non_ascii_chars = 0
         for msg in agent.state.conversation:
             content = msg.get("content") or ""
-            if isinstance(content, str):
-                total += len(content)
-            elif isinstance(content, list):
-                total += sum(len(c.get("text", "")) for c in content if isinstance(c, dict))
-        return total // 4
+            if isinstance(content, list):
+                content = " ".join(
+                    c.get("text", "") for c in content if isinstance(c, dict)
+                )
+            for ch in content:
+                if ord(ch) < 128:
+                    ascii_chars += 1
+                else:
+                    non_ascii_chars += 1
+        return ascii_chars // 4 + non_ascii_chars
 
     def _bottom_toolbar() -> HTML:
         """入力欄の下に表示するステータスバーを生成する。"""

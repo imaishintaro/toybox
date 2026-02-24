@@ -7,7 +7,11 @@ from dotenv import load_dotenv
 # モデルごとのコンテキストウィンドウサイズ（トークン数）
 # CONTEXT_WINDOW 環境変数で上書き可能
 _CONTEXT_WINDOWS: dict[str, int] = {
-    # Anthropic
+    # Anthropic (Claude 4)
+    "anthropic/claude-opus-4":              200_000,
+    "anthropic/claude-sonnet-4-5":          200_000,
+    "anthropic/claude-haiku-4-5":           200_000,
+    # Anthropic (Claude 3.x)
     "anthropic/claude-3.5-sonnet":          200_000,
     "anthropic/claude-3.5-haiku":           200_000,
     "anthropic/claude-3-opus":              200_000,
@@ -19,13 +23,18 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "openai/gpt-4-turbo":                   128_000,
     "openai/gpt-4":                         128_000,
     "openai/gpt-3.5-turbo":                  16_000,
-    # Google
-    "google/gemini-1.5-pro":              1_000_000,
-    "google/gemini-1.5-flash":            1_000_000,
-    "google/gemini-2.0-flash":            1_000_000,
+    # Google (Gemini 2.x)
+    "google/gemini-2.5-pro":              1_048_576,
+    "google/gemini-2.5-flash":            1_048_576,
+    "google/gemini-2.0-flash":            1_048_576,
+    "google/gemini-2.0-flash-lite":       1_048_576,
+    # Google (Gemini 1.x)
+    "google/gemini-1.5-pro":              1_048_576,
+    "google/gemini-1.5-flash":            1_048_576,
     # Meta
     "meta-llama/llama-3.1-70b-instruct":  128_000,
     "meta-llama/llama-3.1-405b-instruct": 128_000,
+    "meta-llama/llama-3.3-70b-instruct":  128_000,
     # Mistral
     "mistralai/mistral-large":            128_000,
     "mistralai/mistral-small":            128_000,
